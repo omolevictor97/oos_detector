@@ -1,9 +1,8 @@
-pandas
-numpy
 ultralytics
 streamlit
-fastapi
-torch
-roboflow
-ipykernel
 opencv-python-headless
+fastapi
+python-multipart
+requests
+numpy
+Pillow
