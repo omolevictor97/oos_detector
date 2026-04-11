@@ -3,6 +3,14 @@ import requests
 from PIL import Image
 import io
 
+import subprocess
+import time
+
+if "api_process" not in st.session_state:
+    st.session_state.api_process = subprocess.Popen(["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"])
+    time.sleep(5) # Give the API time to wake up
+
+
 # App Configuration
 st.set_page_config(page_title="Retail OOS Detector", page_icon="🛒")
 st.title("🛡️ Retail Out-of-Stock (OOS) Detector")
