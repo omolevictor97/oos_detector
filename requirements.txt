@@ -1,9 +1,9 @@
 pandas
 numpy
 ultralytics
-opencv-python
 streamlit
 fastapi
 torch
 roboflow
 ipykernel
+opencv-python-headless
