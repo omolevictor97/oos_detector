@@ -4,6 +4,7 @@ import numpy as np
 from ultralytics import YOLO
 from PIL import Image
 import io
+import os
 
 # Import the custom logic from your detection.py file
 from detection import divide_shelf_into_zones, compute_zones_coverage
@@ -23,7 +24,7 @@ conf_threshold = st.sidebar.slider("Model Confidence", 0.1, 1.0, 0.3)
 @st.cache_resource
 def load_model():
     """Loads the YOLO model into memory once and caches it."""
-    return YOLO("best.pt")
+    return YOLO(os.path.join(os.getcwd(),"best.pt"))
 
 model = load_model()
 
