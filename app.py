@@ -1,81 +1,101 @@
 import streamlit as st
-import requests
+import cv2
+import numpy as np
+from ultralytics import YOLO
 from PIL import Image
 import io
 
-import subprocess
-import time
+# Import the custom logic from your detection.py file
+from detection import divide_shelf_into_zones, compute_zones_coverage
 
-if "api_process" not in st.session_state:
-    st.session_state.api_process = subprocess.Popen(["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"])
-    time.sleep(5) # Give the API time to wake up
-
-
-# App Configuration
-st.set_page_config(page_title="Retail OOS Detector", page_icon="🛒")
+# --- 1. App Configuration ---
+st.set_page_config(page_title="Retail OOS Detector", page_icon="🛒", layout="wide")
 st.title("🛡️ Retail Out-of-Stock (OOS) Detector")
-st.write("Detect gaps and misplaced products in real-time.")
+st.write("Real-time shelf monitoring using YOLOv11 and Spatial Occupancy Grids.")
 
-# Sidebar for Aisle Configuration
+# --- 2. Sidebar for Metadata ---
 st.sidebar.header("Store Location Metadata")
 aisle_input = st.sidebar.text_input("Current Aisle ID", value="Aisle_04")
 camera_input = st.sidebar.text_input("Camera ID", value="Cam_North_01")
+conf_threshold = st.sidebar.slider("Model Confidence", 0.1, 1.0, 0.3)
 
-# Create two tabs for the two different input methods
-tab1, tab2 = st.tabs(["📤 Upload Image", "📸 Live Store Capture"])
+# --- 3. Resource Loading (Cached for Speed) ---
+@st.cache_resource
+def load_model():
+    """Loads the YOLO model into memory once and caches it."""
+    return YOLO("best.pt")
 
-def process_image(img_file):
-    """Helper to send image to FastAPI and display results"""
+model = load_model()
+
+# --- 4. Core Processing Logic ---
+def process_shelf_image(img_file):
     if img_file is not None:
+        # Convert Streamlit upload to OpenCV format
         image = Image.open(img_file)
+        img_array = np.array(image.convert('RGB'))
+        img_cv = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+        H, W = img_cv.shape[:2]
+
         st.image(image, caption='Source Image', width="stretch")
         
-        with st.spinner('Analyzing shelf occupancy...'):
-            # Convert PIL image to bytes
-            img_byte_arr = io.BytesIO()
-            image.save(img_byte_arr, format='JPEG')
-            files = {'file': img_byte_arr.getvalue()}
+        with st.spinner('Calculating shelf occupancy...'):
+            # Run Inference
+            results = model(img_cv, conf=conf_threshold)[0]
             
-            # Request to your local FastAPI server
-            try:
-                params = {'aisle_id': aisle_input}
-                response = requests.post("http://127.0.0.1:8000/detect_oos", params=params, files=files)
-                data = response.json()
-                
-                # Results Display
-                st.subheader(f"Analysis Results: {data['total_gaps']} Gaps Detected")
-                st.write(data["alerts"])
-                
-                if data['total_gaps'] > 0:
-                    for alert in data.get('alerts', []):
-                        shelf = alert.get('shelf', 'Unknown Shelf')
-                        pos = alert.get('position', 'Unknown Position')
-                        sev = alert.get('severity', 'LOW')
-                        
-                        # Ensure aisle_input exists (it must be defined earlier in your script)
-                        aisle = aisle_input if 'aisle_input' in locals() else "Aisle 1"
+            # Guard against no detections
+            if len(results.boxes) == 0:
+                boxes = np.empty((0, 4))
+            else:
+                boxes = results.boxes.xyxy.cpu().numpy()
 
-                        if sev == "HIGH":
-                            st.error(f"🚨 **HIGH PRIORITY**: {shelf} - {pos} ({aisle})")
+            # Run Geometric Spatial Logic (3 Rows, 10 Columns)
+            zones = divide_shelf_into_zones(W, H, cols=10, rows=3)
+            zones = compute_zones_coverage(zones, boxes, coverage_threshold=0.15)
+
+            # Generate Results
+            oos_alerts = []
+            shelf_names = ["Top Shelf", "Middle Shelf", "Bottom Shelf"]
+            
+            for z in zones:
+                if not z["stocked"]:
+                    # Determine Position (Left/Center/Right)
+                    col_pct = z["col"] / 9 
+                    pos = "Left" if col_pct < 0.33 else "Center" if col_pct < 0.66 else "Right"
+                    
+                    # Determine Shelf Level
+                    level = shelf_names[z["row"]] if z["row"] < 3 else f"Level {z['row']}"
+                    
+                    oos_alerts.append({
+                        "shelf": level,
+                        "position": pos,
+                        "severity": "HIGH" if z["coverage"] < 0.05 else "MEDIUM"
+                    })
+
+            # --- 5. Display Results ---
+            st.subheader(f"Analysis Results: {len(oos_alerts)} Gaps Detected")
+            
+            if len(oos_alerts) > 0:
+                cols = st.columns(2)
+                for idx, alert in enumerate(oos_alerts):
+                    with cols[idx % 2]:
+                        msg = f"{alert['shelf']} - {alert['position']} ({aisle_input})"
+                        if alert['severity'] == "HIGH":
+                            st.error(f"🚨 **HIGH PRIORITY**: {msg}")
                         else:
-                            st.warning(f"⚠️ **MEDIUM PRIORITY**: {shelf} - {pos} ({aisle})")
-                else:
-                    st.success("✅ Shelf is fully stocked!")
-            except Exception as e:
-                st.error(f"{str(e)}")
-                print(f"Error during API call: {str(e)}")
+                            st.warning(f"⚠️ **MEDIUM PRIORITY**: {msg}")
+            else:
+                st.success(f"✅ All zones in {aisle_input} are fully stocked!")
 
-# --- Tab 1: Manual Upload ---
+# --- 6. User Interface Tabs ---
+tab1, tab2 = st.tabs(["📤 Upload Image", "📸 Live Store Capture"])
+
 with tab1:
     uploaded_file = st.file_uploader("Upload shelf photo", type=["jpg", "png", "jpeg"])
     if st.button('Analyze Uploaded Photo'):
-        process_image(uploaded_file)
+        process_shelf_image(uploaded_file)
 
-# --- Tab 2: Camera Capture ---
 with tab2:
     st.info("Ensure the camera is leveled with the shelf for best results.")
     cam_file = st.camera_input("Capture live shelf image")
-    
-    # In Streamlit, camera_input triggers immediately upon capture
     if cam_file:
-        process_image(cam_file)
+        process_shelf_image(cam_file)
