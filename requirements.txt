@@ -1,8 +1,7 @@
 ultralytics
 streamlit
 opencv-python-headless
-fastapi
-python-multipart
-requests
 numpy
-Pillow
+Pillow>=10.0.0
+requests
+python-magic
