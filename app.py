@@ -6,6 +6,16 @@ from PIL import Image
 import io
 import os
 
+import sys
+try:
+    import imghdr
+except ImportError:
+    # Polyfill for Python 3.13+ where imghdr is removed
+    from types import ModuleType
+    imghdr = ModuleType("imghdr")
+    imghdr.what = lambda f, h=None: None
+    sys.modules["imghdr"] = imghdr
+
 # Import the custom logic from your detection.py file
 from detection import divide_shelf_into_zones, compute_zones_coverage
 
